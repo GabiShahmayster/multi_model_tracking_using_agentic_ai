@@ -13,6 +13,7 @@ All trackers use position-only measurements and estimate the full state
 """
 
 import numpy as np
+import unittest
 from typing import Tuple, Optional
 
 
@@ -398,88 +399,251 @@ class ConstantAccelerationKalmanFilter:
         return self.P.copy()
 
 
+class TestStaticKalmanFilter(unittest.TestCase):
+    """Unit tests for StaticKalmanFilter."""
+    
+    def setUp(self):
+        self.tracker = StaticKalmanFilter(
+            initial_position=(0.0, 0.0),
+            position_uncertainty=1.0,
+            process_noise=0.1,
+            measurement_noise=0.5
+        )
+    
+    def test_initialization(self):
+        """Test proper initialization."""
+        pos = self.tracker.get_state()
+        self.assertEqual(pos, (0.0, 0.0))
+        
+        # Check covariance matrix dimensions
+        cov = self.tracker.get_covariance()
+        self.assertEqual(cov.shape, (2, 2))
+    
+    def test_predict_static(self):
+        """Test prediction for static model."""
+        initial_pos = self.tracker.get_state()
+        predicted_pos = self.tracker.predict(dt=1.0)
+        
+        # For static model, prediction should not change position
+        self.assertEqual(initial_pos, predicted_pos)
+    
+    def test_update_with_measurement(self):
+        """Test update with position measurement."""
+        measurement = (5.0, 3.0)
+        updated_pos = self.tracker.update(measurement)
+        
+        # Position should move toward measurement
+        self.assertNotEqual(updated_pos, (0.0, 0.0))
+        self.assertIsInstance(updated_pos[0], float)
+        self.assertIsInstance(updated_pos[1], float)
+    
+    def test_convergence(self):
+        """Test convergence to true position with multiple measurements."""
+        true_position = (10.0, 5.0)
+        measurements = [(10.1, 4.9), (9.9, 5.1), (10.0, 5.0), (9.8, 5.2), (10.2, 4.8)]
+        
+        for meas in measurements:
+            self.tracker.predict()
+            self.tracker.update(meas)
+        
+        final_pos = self.tracker.get_state()
+        # Should converge close to true position
+        self.assertAlmostEqual(final_pos[0], true_position[0], delta=1.0)
+        self.assertAlmostEqual(final_pos[1], true_position[1], delta=1.0)
+
+
+class TestConstantVelocityKalmanFilter(unittest.TestCase):
+    """Unit tests for ConstantVelocityKalmanFilter."""
+    
+    def setUp(self):
+        self.tracker = ConstantVelocityKalmanFilter(
+            initial_position=(0.0, 0.0),
+            initial_velocity=(1.0, 0.5),
+            position_uncertainty=1.0,
+            velocity_uncertainty=0.5,
+            process_noise=0.1,
+            measurement_noise=0.3
+        )
+    
+    def test_initialization(self):
+        """Test proper initialization."""
+        pos, vel = self.tracker.get_state()
+        self.assertEqual(pos, (0.0, 0.0))
+        self.assertEqual(vel, (1.0, 0.5))
+        
+        # Check covariance matrix dimensions
+        cov = self.tracker.get_covariance()
+        self.assertEqual(cov.shape, (4, 4))
+    
+    def test_predict_constant_velocity(self):
+        """Test prediction for constant velocity model."""
+        dt = 2.0
+        predicted_pos, predicted_vel = self.tracker.predict(dt)
+        
+        # Position should change based on velocity
+        expected_x = 0.0 + 1.0 * dt  # x = x0 + vx * dt
+        expected_y = 0.0 + 0.5 * dt  # y = y0 + vy * dt
+        
+        self.assertAlmostEqual(predicted_pos[0], expected_x, places=5)
+        self.assertAlmostEqual(predicted_pos[1], expected_y, places=5)
+        
+        # Velocity should remain constant in prediction
+        self.assertAlmostEqual(predicted_vel[0], 1.0, places=5)
+        self.assertAlmostEqual(predicted_vel[1], 0.5, places=5)
+    
+    def test_update_with_measurement(self):
+        """Test update with position measurement."""
+        measurement = (2.0, 1.0)
+        updated_pos, updated_vel = self.tracker.update(measurement)
+        
+        # State should be updated
+        self.assertNotEqual(updated_pos, (0.0, 0.0))
+        self.assertIsInstance(updated_pos[0], float)
+        self.assertIsInstance(updated_pos[1], float)
+        self.assertIsInstance(updated_vel[0], float)
+        self.assertIsInstance(updated_vel[1], float)
+    
+    def test_tracking_linear_motion(self):
+        """Test tracking object with known linear motion."""
+        # Simulate object moving with velocity (2.0, 1.0)
+        true_velocity = (2.0, 1.0)
+        dt = 1.0
+        
+        # Set up tracker with correct initial velocity
+        tracker = ConstantVelocityKalmanFilter(
+            initial_position=(0.0, 0.0),
+            initial_velocity=true_velocity,
+            measurement_noise=0.1
+        )
+        
+        # Generate perfect measurements (no noise)
+        for i in range(5):
+            true_pos = (true_velocity[0] * i * dt, true_velocity[1] * i * dt)
+            tracker.predict(dt)
+            pos, vel = tracker.update(true_pos)
+            
+            # Should track position accurately
+            self.assertAlmostEqual(pos[0], true_pos[0], delta=0.5)
+            self.assertAlmostEqual(pos[1], true_pos[1], delta=0.5)
+
+
+class TestConstantAccelerationKalmanFilter(unittest.TestCase):
+    """Unit tests for ConstantAccelerationKalmanFilter."""
+    
+    def setUp(self):
+        self.tracker = ConstantAccelerationKalmanFilter(
+            initial_position=(0.0, 0.0),
+            initial_velocity=(0.0, 0.0),
+            initial_acceleration=(1.0, 0.5),
+            position_uncertainty=1.0,
+            velocity_uncertainty=0.5,
+            acceleration_uncertainty=0.2,
+            process_noise=0.05,
+            measurement_noise=0.2
+        )
+    
+    def test_initialization(self):
+        """Test proper initialization."""
+        pos, vel, acc = self.tracker.get_state()
+        self.assertEqual(pos, (0.0, 0.0))
+        self.assertEqual(vel, (0.0, 0.0))
+        self.assertEqual(acc, (1.0, 0.5))
+        
+        # Check covariance matrix dimensions
+        cov = self.tracker.get_covariance()
+        self.assertEqual(cov.shape, (6, 6))
+    
+    def test_predict_constant_acceleration(self):
+        """Test prediction for constant acceleration model."""
+        dt = 2.0
+        predicted_pos, predicted_vel, predicted_acc = self.tracker.predict(dt)
+        
+        # Position: x = x0 + v0*t + 0.5*a*t²
+        expected_x = 0.0 + 0.0 * dt + 0.5 * 1.0 * dt * dt
+        expected_y = 0.0 + 0.0 * dt + 0.5 * 0.5 * dt * dt
+        
+        # Velocity: v = v0 + a*t
+        expected_vx = 0.0 + 1.0 * dt
+        expected_vy = 0.0 + 0.5 * dt
+        
+        self.assertAlmostEqual(predicted_pos[0], expected_x, places=5)
+        self.assertAlmostEqual(predicted_pos[1], expected_y, places=5)
+        self.assertAlmostEqual(predicted_vel[0], expected_vx, places=5)
+        self.assertAlmostEqual(predicted_vel[1], expected_vy, places=5)
+        
+        # Acceleration should remain constant
+        self.assertAlmostEqual(predicted_acc[0], 1.0, places=5)
+        self.assertAlmostEqual(predicted_acc[1], 0.5, places=5)
+    
+    def test_update_with_measurement(self):
+        """Test update with position measurement."""
+        measurement = (2.0, 1.0)
+        updated_pos, updated_vel, updated_acc = self.tracker.update(measurement)
+        
+        # State should be updated
+        self.assertNotEqual(updated_pos, (0.0, 0.0))
+        self.assertIsInstance(updated_pos[0], float)
+        self.assertIsInstance(updated_pos[1], float)
+        self.assertIsInstance(updated_vel[0], float)
+        self.assertIsInstance(updated_vel[1], float)
+        self.assertIsInstance(updated_acc[0], float)
+        self.assertIsInstance(updated_acc[1], float)
+    
+    def test_tracking_accelerated_motion(self):
+        """Test tracking object with known constant acceleration."""
+        # Simulate object with acceleration (0.5, 0.2)
+        true_acceleration = (0.5, 0.2)
+        dt = 1.0
+        
+        # Set up tracker with correct acceleration
+        tracker = ConstantAccelerationKalmanFilter(
+            initial_position=(0.0, 0.0),
+            initial_velocity=(0.0, 0.0),
+            initial_acceleration=true_acceleration,
+            measurement_noise=0.1
+        )
+        
+        # Generate measurements for accelerated motion
+        for i in range(5):
+            t = i * dt
+            # Position: x = 0.5*a*t²
+            true_pos = (0.5 * true_acceleration[0] * t * t, 
+                       0.5 * true_acceleration[1] * t * t)
+            
+            tracker.predict(dt)
+            pos, vel, acc = tracker.update(true_pos)
+            
+            # Should track position accurately
+            if i > 0:  # Skip first measurement (t=0, pos=0)
+                self.assertAlmostEqual(pos[0], true_pos[0], delta=1.0)
+                self.assertAlmostEqual(pos[1], true_pos[1], delta=1.0)
+    
+    def test_state_estimation_consistency(self):
+        """Test that estimated states are consistent with physics."""
+        # After prediction, check that position, velocity, acceleration are consistent
+        dt = 1.0
+        
+        # Get initial state
+        pos0, vel0, acc0 = self.tracker.get_state()
+        
+        # Predict
+        pos1, vel1, acc1 = self.tracker.predict(dt)
+        
+        # Check kinematic consistency
+        # v = v0 + a*t
+        expected_vx = vel0[0] + acc0[0] * dt
+        expected_vy = vel0[1] + acc0[1] * dt
+        
+        self.assertAlmostEqual(vel1[0], expected_vx, places=5)
+        self.assertAlmostEqual(vel1[1], expected_vy, places=5)
+        
+        # x = x0 + v0*t + 0.5*a*t²
+        expected_x = pos0[0] + vel0[0] * dt + 0.5 * acc0[0] * dt * dt
+        expected_y = pos0[1] + vel0[1] * dt + 0.5 * acc0[1] * dt * dt
+        
+        self.assertAlmostEqual(pos1[0], expected_x, places=5)
+        self.assertAlmostEqual(pos1[1], expected_y, places=5)
+
+
 if __name__ == '__main__':
-    """Example usage of the Kalman filter trackers."""
-    print("Kalman Filter Trackers Example")
-    print("=" * 40)
-    
-    # Example 1: Static tracker
-    print("1. Static Tracker Example:")
-    static_tracker = StaticKalmanFilter(
-        initial_position=(0.0, 0.0),
-        position_uncertainty=2.0,
-        process_noise=0.1,
-        measurement_noise=1.0
-    )
-    
-    # Simulate some noisy measurements of a stationary target at (10, 5)
-    true_position = (10.0, 5.0)
-    measurements = [(10.2, 4.8), (9.9, 5.1), (10.1, 4.9), (9.8, 5.2)]
-    
-    print(f"  True position: {true_position}")
-    print("  Measurements and estimates:")
-    for i, meas in enumerate(measurements):
-        static_tracker.predict()
-        est_pos = static_tracker.update(meas)
-        print(f"    Step {i+1}: measurement={meas}, estimate={est_pos[0]:.2f}, {est_pos[1]:.2f}")
-    
-    print()
-    
-    # Example 2: Constant velocity tracker
-    print("2. Constant Velocity Tracker Example:")
-    cv_tracker = ConstantVelocityKalmanFilter(
-        initial_position=(0.0, 0.0),
-        initial_velocity=(1.0, 0.5),
-        position_uncertainty=1.0,
-        velocity_uncertainty=0.5,
-        process_noise=0.1,
-        measurement_noise=0.5
-    )
-    
-    print("  Tracking object with velocity (1.0, 0.5) m/s:")
-    dt = 1.0
-    for i in range(5):
-        # True position at time t = i * dt
-        true_pos = (1.0 * i * dt, 0.5 * i * dt)
-        # Add some noise to create measurement
-        noise_x = np.random.normal(0, 0.3)
-        noise_y = np.random.normal(0, 0.3)
-        meas = (true_pos[0] + noise_x, true_pos[1] + noise_y)
-        
-        cv_tracker.predict(dt)
-        est_pos, est_vel = cv_tracker.update(meas)
-        print(f"    t={i*dt:.1f}s: true_pos={true_pos}, measurement={meas[0]:.2f}, {meas[1]:.2f}")
-        print(f"              estimate_pos={est_pos[0]:.2f}, {est_pos[1]:.2f}, estimate_vel={est_vel[0]:.2f}, {est_vel[1]:.2f}")
-    
-    print()
-    
-    # Example 3: Constant acceleration tracker
-    print("3. Constant Acceleration Tracker Example:")
-    ca_tracker = ConstantAccelerationKalmanFilter(
-        initial_position=(0.0, 0.0),
-        initial_velocity=(0.0, 0.0),
-        initial_acceleration=(0.5, 0.2),
-        position_uncertainty=1.0,
-        velocity_uncertainty=0.5,
-        acceleration_uncertainty=0.2,
-        process_noise=0.05,
-        measurement_noise=0.3
-    )
-    
-    print("  Tracking object with acceleration (0.5, 0.2) m/s²:")
-    dt = 1.0
-    for i in range(5):
-        t = i * dt
-        # True position: x = 0.5*a*t² = 0.25*t², y = 0.1*t²
-        true_pos = (0.25 * t * t, 0.1 * t * t)
-        # Add noise
-        noise_x = np.random.normal(0, 0.2)
-        noise_y = np.random.normal(0, 0.2)
-        meas = (true_pos[0] + noise_x, true_pos[1] + noise_y)
-        
-        ca_tracker.predict(dt)
-        est_pos, est_vel, est_acc = ca_tracker.update(meas)
-        print(f"    t={t:.1f}s: true_pos={true_pos[0]:.2f}, {true_pos[1]:.2f}, measurement={meas[0]:.2f}, {meas[1]:.2f}")
-        print(f"             estimate_pos={est_pos[0]:.2f}, {est_pos[1]:.2f}, vel={est_vel[0]:.2f}, {est_vel[1]:.2f}, acc={est_acc[0]:.2f}, {est_acc[1]:.2f}")
-    
-    print("\nKalman filter examples completed!")
+    unittest.main()
