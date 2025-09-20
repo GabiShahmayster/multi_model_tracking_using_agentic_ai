@@ -37,54 +37,8 @@ sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'base'))
 from motion import MotionSimulator
 from trackers import StaticKalmanFilter
 
-try:
-    from langchain_community.llms import Ollama
-    from langgraph.graph import StateGraph, END
-    LANGCHAIN_AVAILABLE = True
-except ImportError:
-    print("Warning: LangChain/LangGraph not available. Using mock LLM implementation.")
-    LANGCHAIN_AVAILABLE = False
-
-    # Mock classes for when LangGraph is not available
-    class StateGraph:
-        def __init__(self, state_type):
-            self.state_type = state_type
-            self.nodes = {}
-            self.edges = []
-            self.entry_point = None
-
-        def add_node(self, name, func):
-            self.nodes[name] = func
-
-        def add_edge(self, from_node, to_node):
-            self.edges.append((from_node, to_node))
-
-        def set_entry_point(self, node):
-            self.entry_point = node
-
-        def compile(self):
-            return MockWorkflow(self.nodes, self.edges, self.entry_point)
-
-    class MockWorkflow:
-        def __init__(self, nodes, edges, entry_point):
-            self.nodes = nodes
-            self.edges = edges
-            self.entry_point = entry_point
-
-        def invoke(self, state):
-            # Execute all nodes in sequence for mock implementation
-            current_state = state.copy()
-
-            # Execute workflow: statistical_analysis -> llm_reasoning -> decision_fusion -> alert_generation
-            node_sequence = ["statistical_analysis", "llm_reasoning", "decision_fusion", "alert_generation"]
-
-            for node_name in node_sequence:
-                if node_name in self.nodes:
-                    current_state = self.nodes[node_name](current_state)
-
-            return current_state
-
-    END = "END"
+from langchain_community.llms import Ollama
+from langgraph.graph import StateGraph, END
 
 
 # Enhanced State Management with LLM capabilities
@@ -122,25 +76,6 @@ class LLMEnhancedMonitorState(TypedDict):
     statistical_summary: Dict[str, float]
 
 
-class MockOllama:
-    """Mock LLM for when Ollama is not available"""
-
-    def __call__(self, prompt: str) -> str:
-        # Simple pattern-based responses for demonstration
-        if "sudden increase" in prompt.lower() or "bias" in prompt.lower():
-            return ("Analysis: The innovation sequence shows a systematic bias indicating "
-                   "model mismatch. The static filter cannot capture the target's motion, "
-                   "resulting in persistent prediction errors. Confidence: High (0.85). "
-                   "Recommendation: Switch to constant velocity model.")
-        elif "normal" in prompt.lower() or "small" in prompt.lower():
-            return ("Analysis: Innovation sequence appears normal with expected measurement "
-                   "noise characteristics. No systematic bias detected. "
-                   "Confidence: Medium (0.70). Recommendation: Continue current model.")
-        else:
-            return ("Analysis: Analyzing innovation patterns for model appropriateness. "
-                   "Statistical indicators suggest careful monitoring is needed. "
-                   "Confidence: Medium (0.60).")
-
 
 class LLMEnhancedInnovationAgent:
     """
@@ -151,16 +86,12 @@ class LLMEnhancedInnovationAgent:
                  ollama_model: str = "llama3.2"):
 
         # Initialize LLM
-        if LANGCHAIN_AVAILABLE:
-            try:
-                self.llm = Ollama(model=ollama_model, base_url="http://localhost:11434")
-                print(f"Initialized Ollama with model: {ollama_model}")
-            except Exception as e:
-                print(f"Failed to connect to Ollama: {e}")
-                print("Using mock LLM implementation")
-                self.llm = MockOllama()
-        else:
-            self.llm = MockOllama()
+        try:
+            self.llm = Ollama(model=ollama_model, base_url="http://localhost:11434")
+            print(f"Initialized Ollama with model: {ollama_model}")
+        except Exception as e:
+            print(f"Failed to connect to Ollama: {e}")
+            raise ConnectionError(f"Could not connect to Ollama at http://localhost:11434 with model {ollama_model}")
 
         # Initialize state
         self.state = LLMEnhancedMonitorState(
