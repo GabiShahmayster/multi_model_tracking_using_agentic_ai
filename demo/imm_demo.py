@@ -20,6 +20,12 @@ This demonstrates how the IMM algorithm adapts to changing motion dynamics.
 
 import numpy as np
 import matplotlib.pyplot as plt
+import sys
+import os
+
+# Add base directory to path to import core modules
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'base'))
+
 from motion import MotionSimulator
 from imm import IMMTracker
 

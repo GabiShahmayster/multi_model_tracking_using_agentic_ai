@@ -8,8 +8,10 @@ and dynamically estimating which model is most likely active.
 
 Models supported:
 - Static (stationary target)
-- Constant Velocity (linear motion)  
+- Constant Velocity (linear motion)
 - Constant Acceleration (accelerated motion)
+
+Includes both 3-model IMM (IMMTracker) and 2-model IMM (TwoModelIMM) implementations.
 """
 
 import numpy as np
@@ -17,6 +19,156 @@ import unittest
 from typing import Tuple, List, Optional
 from trackers import StaticKalmanFilter, ConstantVelocityKalmanFilter, ConstantAccelerationKalmanFilter
 from motion import MotionSimulator
+
+
+class TwoModelIMM:
+    """
+    Two-Model IMM Tracker using only Static and Constant Velocity models.
+
+    Model 0: Static
+    Model 1: Constant Velocity
+    """
+
+    def __init__(self, initial_position: Tuple[float, float],
+                 initial_velocity: Optional[Tuple[float, float]] = None,
+                 model_transition_matrix: Optional[np.ndarray] = None,
+                 initial_model_probabilities: Optional[np.ndarray] = None,
+                 position_uncertainty: float = 1.0,
+                 velocity_uncertainty: float = 1.0,
+                 process_noise_static: float = 0.1,
+                 process_noise_cv: float = 0.1,
+                 measurement_noise: float = 1.0):
+
+        if initial_velocity is None:
+            initial_velocity = (0.0, 0.0)
+
+        # Model transition matrix (2x2)
+        if model_transition_matrix is None:
+            self.pi = np.array([[0.95, 0.05],  # Static -> [Static, CV]
+                               [0.05, 0.95]]) # CV -> [Static, CV]
+        else:
+            self.pi = model_transition_matrix.copy()
+
+        # Initial model probabilities
+        if initial_model_probabilities is None:
+            self.mu = np.array([0.8, 0.2])  # [Static, CV]
+        else:
+            self.mu = initial_model_probabilities.copy()
+
+        # Normalize model probabilities
+        self.mu = self.mu / np.sum(self.mu)
+
+        # Number of models
+        self.N = 2
+
+        # Initialize Kalman filters
+        self.filters = []
+
+        # Model 0: Static
+        self.filters.append(StaticKalmanFilter(
+            initial_position=initial_position,
+            position_uncertainty=position_uncertainty,
+            process_noise=process_noise_static,
+            measurement_noise=measurement_noise
+        ))
+
+        # Model 1: Constant Velocity
+        self.filters.append(ConstantVelocityKalmanFilter(
+            initial_position=initial_position,
+            initial_velocity=initial_velocity,
+            position_uncertainty=position_uncertainty,
+            velocity_uncertainty=velocity_uncertainty,
+            process_noise=process_noise_cv,
+            measurement_noise=measurement_noise
+        ))
+
+        # Initialize combined estimates
+        self.combined_position = initial_position
+        self.combined_velocity = initial_velocity
+
+    def predict(self, dt: float = 1.0):
+        """Predict step for all models."""
+        for filter_obj in self.filters:
+            filter_obj.predict(dt)
+
+    def update(self, measurement: Tuple[float, float]):
+        """Update step with IMM algorithm."""
+        # Step 1: Model mixing
+        self._mixing()
+
+        # Step 2: Model-specific filtering
+        self.likelihoods = np.zeros(self.N)
+        self.innovations = np.zeros((self.N, 2))  # Store innovations for each model
+
+        for j in range(self.N):
+            # Get prediction before update for innovation calculation
+            if j == 0:  # Static model
+                predicted_pos = self.filters[j].get_state()
+            else:  # CV model
+                predicted_state = self.filters[j].get_state()
+                predicted_pos = predicted_state[0]
+
+            # Calculate innovation (measurement - prediction)
+            innovation_x = measurement[0] - predicted_pos[0]
+            innovation_y = measurement[1] - predicted_pos[1]
+            self.innovations[j] = [innovation_x, innovation_y]
+
+            # Update each filter
+            self.filters[j].update(measurement)
+
+            # Calculate likelihood based on innovation magnitude
+            error_mag = np.sqrt(innovation_x**2 + innovation_y**2)
+
+            # Convert error to likelihood (smaller error = higher likelihood)
+            self.likelihoods[j] = np.exp(-error_mag**2 / 2.0)
+
+        # Step 3: Model probability update
+        self._update_probabilities()
+
+        # Step 4: Estimate combination
+        self._combine_estimates()
+
+    def _mixing(self):
+        """Mix estimates from different models."""
+        # Simplified mixing - in practice would do full covariance mixing
+        pass
+
+    def _update_probabilities(self):
+        """Update model probabilities."""
+        # Simplified probability update
+        # In practice would use proper likelihood calculations
+        self.mu = self.mu * self.likelihoods
+        self.mu = self.mu / np.sum(self.mu)
+
+    def _combine_estimates(self):
+        """Combine estimates from all models."""
+        # Get states from each filter
+        static_pos = self.filters[0].get_state()  # Returns (x, y)
+        cv_state = self.filters[1].get_state()   # Returns ((x, y), (vx, vy))
+        cv_pos = cv_state[0]  # Position tuple
+        cv_vel = cv_state[1]  # Velocity tuple
+
+        # Combine positions
+        pos_x = self.mu[0] * static_pos[0] + self.mu[1] * cv_pos[0]
+        pos_y = self.mu[0] * static_pos[1] + self.mu[1] * cv_pos[1]
+        self.combined_position = (pos_x, pos_y)
+
+        # Combine velocities (static model has zero velocity)
+        vel_x = self.mu[0] * 0.0 + self.mu[1] * cv_vel[0]
+        vel_y = self.mu[0] * 0.0 + self.mu[1] * cv_vel[1]
+        self.combined_velocity = (vel_x, vel_y)
+
+    def get_state(self) -> Tuple[Tuple[float, float], Tuple[float, float], Tuple[float, float]]:
+        """Get current combined state estimate."""
+        return self.combined_position, self.combined_velocity, (0.0, 0.0)  # No acceleration for 2-model
+
+    def get_model_probabilities(self) -> np.ndarray:
+        """Get current model probabilities."""
+        return self.mu.copy()
+
+    def get_innovations(self) -> np.ndarray:
+        """Get current innovation sequence for each model."""
+        return self.innovations.copy() if hasattr(self, 'innovations') else np.zeros((self.N, 2))
 
 
 class IMMTracker:

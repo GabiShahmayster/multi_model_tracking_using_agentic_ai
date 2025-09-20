@@ -22,12 +22,18 @@ Features:
 
 import numpy as np
 import matplotlib.pyplot as plt
-from motion import MotionSimulator
-from trackers import StaticKalmanFilter
+import sys
+import os
 from typing import TypedDict, List, Optional, Tuple
 from dataclasses import dataclass
 from enum import Enum
 import statistics
+
+# Add base directory to path to import core modules
+sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'base'))
+
+from motion import MotionSimulator
+from trackers import StaticKalmanFilter
 
 
 # Agent State Management
