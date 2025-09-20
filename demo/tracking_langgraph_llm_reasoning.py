@@ -83,7 +83,7 @@ class LLMEnhancedInnovationAgent:
     """
 
     def __init__(self, window_size: int = 20, bias_threshold: float = 1.5,
-                 ollama_model: str = "llama3.2"):
+                 ollama_model: str = "llama3"):
 
         # Initialize LLM
         try:
