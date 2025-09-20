@@ -603,7 +603,8 @@ def main():
     plt.tight_layout()
 
     # Save the plot
-    plot_filename = 'wrong_model_with_agent_tracking.png'
+    os.makedirs('../results/tracking_langgraph_logic', exist_ok=True)
+    plot_filename = '../results/tracking_langgraph_logic/wrong_model_with_agent_tracking.png'
     plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
     print(f"Comprehensive plots with agent monitoring saved to: {plot_filename}")
 

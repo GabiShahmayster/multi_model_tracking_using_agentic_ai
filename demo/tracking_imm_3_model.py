@@ -237,7 +237,8 @@ def create_state_plots(times, true_pos, true_vel, true_acc, imm_pos, imm_vel, im
     axes[2, 1].axvline(x=20, color='orange', linestyle=':', alpha=0.7)
     
     plt.tight_layout()
-    plt.savefig('imm_state_estimation.png', dpi=300, bbox_inches='tight')
+    os.makedirs('../results/tracking_imm_3_model', exist_ok=True)
+    plt.savefig('../results/tracking_imm_3_model/imm_state_estimation.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 
@@ -285,7 +286,7 @@ def create_model_probability_plots(times, model_probs):
     ax1.text(60, 0.9, 'Constant Velocity Phase', ha='center', bbox=dict(boxstyle="round,pad=0.3", facecolor="lightgray"))
     
     plt.tight_layout()
-    plt.savefig('imm_model_probabilities.png', dpi=300, bbox_inches='tight')
+    plt.savefig('../results/tracking_imm_3_model/imm_model_probabilities.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 
@@ -354,7 +355,7 @@ def create_error_plots(times, pos_errors, vel_errors, acc_errors):
     axes[2, 1].axvline(x=20, color='orange', linestyle=':', alpha=0.7)
     
     plt.tight_layout()
-    plt.savefig('imm_tracking_errors.png', dpi=300, bbox_inches='tight')
+    plt.savefig('../results/tracking_imm_3_model/imm_tracking_errors.png', dpi=300, bbox_inches='tight')
     plt.close()
     
     # Create RMS error plot
@@ -391,7 +392,7 @@ def create_error_plots(times, pos_errors, vel_errors, acc_errors):
     ax.axvline(x=20, color='orange', linestyle=':', alpha=0.7)
     
     plt.tight_layout()
-    plt.savefig('imm_rms_errors.png', dpi=300, bbox_inches='tight')
+    plt.savefig('../results/tracking_imm_3_model/imm_rms_errors.png', dpi=300, bbox_inches='tight')
     plt.close()
 
 

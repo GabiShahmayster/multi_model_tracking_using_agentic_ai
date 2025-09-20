@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
 """
-Correct Model Tracking Demonstration
+Wrong Model Tracking Demonstration
 
-This script demonstrates proper tracking using an IMM (Interacting Multiple Model) filter
-for the same target motion profile as wrong_model.py:
+This script demonstrates the effects of using an incorrect motion model for tracking.
+The target follows a specific motion profile:
 - 0-50s: Static (no motion)
 - 50-100s: Constant velocity (10 m/s in x-direction)
 
-The tracker uses an IMM filter with two models:
-- Model 0: Static motion model
-- Model 1: Constant velocity motion model
+However, the tracker uses a static motion model throughout the entire simulation,
+which is correct for the first 50 seconds but completely wrong for the second 50 seconds.
 
-The IMM algorithm automatically switches between models based on which one
-best explains the current measurements, providing optimal tracking performance.
+This shows how model mismatch affects tracking performance, particularly:
+- Position tracking errors during the constant velocity phase
+- Velocity estimation errors (static model assumes zero velocity)
 """
 
 import numpy as np
@@ -24,11 +24,11 @@ import os
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'base'))
 
 from motion import MotionSimulator
-from imm import TwoModelIMM
+from trackers import StaticKalmanFilter
 
 
 def main():
-    print("Correct Model Tracking Demonstration (IMM Filter)")
+    print("Wrong Model Tracking Demonstration")
     print("=" * 50)
 
     # Simulation parameters
@@ -46,10 +46,20 @@ def main():
     print("  0-50s:  Static (no motion)")
     print(" 50-100s: Constant velocity (10 m/s in x-direction)")
     print()
-    print("Tracker model: IMM Filter (Static + Constant Velocity models)")
+    print("Tracker model: Static motion model (WRONG for 50-100s)")
     print()
 
-    # Create motion simulator (same as wrong_model.py)
+    # Create motion simulator
+    sim = MotionSimulator(x0=0.0, y0=0.0, vx0=0.0, vy0=0.0)
+    sim.add_segment(sim.STATIC, 50.0)  # Static for 50 seconds
+    sim.add_segment(sim.CONSTANT_VELOCITY, 50.0)  # Constant velocity for 50 seconds
+
+    # Set the constant velocity for the second segment
+    # The velocity will be 10 m/s in x-direction, 0 in y-direction
+    # This happens automatically since the simulator maintains velocity from previous segment
+    # We need to manually set this by getting the end state and creating a new segment
+
+    # Actually, let's create this more explicitly
     sim = MotionSimulator(x0=0.0, y0=0.0, vx0=0.0, vy0=0.0)
     sim.add_segment(sim.STATIC, 50.0)  # Static for 50 seconds
 
@@ -63,38 +73,20 @@ def main():
     print(f"Total simulation duration: {sim.duration} seconds")
     print()
 
-    # Initialize IMM tracker with static and constant velocity models
+    # Initialize static Kalman filter (wrong model for second half)
     initial_position = (0.0, 0.0)
-    initial_velocity = (0.0, 0.0)
-
-    # Model transition matrix - 2 models: Static, CV
-    model_transition_matrix = np.array([
-        [0.95, 0.05],  # Static -> [Static, CV]
-        [0.05, 0.95]   # CV -> [Static, CV]
-    ])
-
-    # Initial model probabilities (start assuming static)
-    initial_model_probabilities = np.array([0.9, 0.1])  # [Static, CV]
-
-    tracker = TwoModelIMM(
+    tracker = StaticKalmanFilter(
         initial_position=initial_position,
-        initial_velocity=initial_velocity,
-        model_transition_matrix=model_transition_matrix,
-        initial_model_probabilities=initial_model_probabilities,
         position_uncertainty=1.0,
-        velocity_uncertainty=1.0,
-        process_noise_static=0.1,
-        process_noise_cv=0.1,
+        process_noise=0.1,  # Small process noise for static model
         measurement_noise=measurement_noise_std
     )
 
-    print("IMM tracker initialized")
+    print("Static Kalman filter initialized")
     print(f"  Initial position: {initial_position}")
-    print(f"  Initial velocity: {initial_velocity}")
-    print(f"  Models: Static + Constant Velocity (2-model IMM)")
-    print(f"  Initial model probs: {initial_model_probabilities}")
-    print(f"  Model transition matrix:")
-    print(f"    {model_transition_matrix}")
+    print(f"  Position uncertainty: 1.0 m")
+    print(f"  Process noise: 0.1 m")
+    print(f"  Measurement noise: {measurement_noise_std} m")
     print()
 
     # Generate time steps
@@ -108,14 +100,12 @@ def main():
     true_velocities = np.zeros((n_steps, 2))
     measurements = np.zeros((n_steps, 2))
     estimated_positions = np.zeros((n_steps, 2))
-    estimated_velocities = np.zeros((n_steps, 2))
+    estimated_velocities = np.zeros((n_steps, 2))  # Will be zero for static model
     position_errors = np.zeros((n_steps, 2))
     velocity_errors = np.zeros((n_steps, 2))
-    model_probabilities = np.zeros((n_steps, 2))  # [Static, CV] probabilities
-    innovations_static = np.zeros((n_steps, 2))  # Innovations for static model
-    innovations_cv = np.zeros((n_steps, 2))  # Innovations for CV model
+    innovations = np.zeros((n_steps, 2))  # Innovation sequence (measurement - prediction)
 
-    # Generate true motion and noisy measurements (same as wrong_model.py)
+    # Generate true motion and noisy measurements
     np.random.seed(42)  # For reproducible results
     for i, t in enumerate(times):
         # Get true position and velocity
@@ -133,34 +123,34 @@ def main():
     print()
 
     # Run tracking simulation
-    print("Running IMM tracking simulation...")
+    print("Running tracking simulation...")
     for i, t in enumerate(times):
-        # Update tracker with measurement
+        # Get prediction before update for innovation calculation
+        if i == 0:
+            predicted_pos = tracker.get_state()
+        else:
+            tracker.predict()
+            predicted_pos = tracker.get_state()
+
+        # Calculate innovation (measurement - prediction)
         measurement = measurements[i]
+        innovations[i] = np.array(measurement) - np.array(predicted_pos)
+
+        # Update tracker with measurement
         tracker.update(measurement)
 
         # Get tracker estimates
-        estimated_state = tracker.get_state()
-        estimated_pos = estimated_state[0]  # Position
-        estimated_vel = estimated_state[1]  # Velocity
-        model_probs = tracker.get_model_probabilities()
-        innovations = tracker.get_innovations()
+        estimated_pos = tracker.get_state()
+        estimated_vel = (0.0, 0.0)  # Static model always estimates zero velocity
 
         estimated_positions[i] = estimated_pos
         estimated_velocities[i] = estimated_vel
-        model_probabilities[i] = model_probs
-        innovations_static[i] = innovations[0]  # Static model innovations
-        innovations_cv[i] = innovations[1]  # CV model innovations
 
         # Calculate errors
         position_errors[i] = np.array(true_positions[i]) - np.array(estimated_pos)
         velocity_errors[i] = np.array(true_velocities[i]) - np.array(estimated_vel)
 
-        # Predict for next time step
-        if i < n_steps - 1:
-            tracker.predict(dt)
-
-    print("IMM tracking simulation completed")
+    print("Tracking simulation completed")
     print()
 
     # Calculate error statistics
@@ -169,15 +159,14 @@ def main():
     # Position error magnitudes
     position_error_mag = np.sqrt(position_errors[:, 0]**2 + position_errors[:, 1]**2)
     velocity_error_mag = np.sqrt(velocity_errors[:, 0]**2 + velocity_errors[:, 1]**2)
-    innovation_static_mag = np.sqrt(innovations_static[:, 0]**2 + innovations_static[:, 1]**2)
-    innovation_cv_mag = np.sqrt(innovations_cv[:, 0]**2 + innovations_cv[:, 1]**2)
+    innovation_mag = np.sqrt(innovations[:, 0]**2 + innovations[:, 1]**2)
 
-    # Statistics for first 50 seconds (static phase)
+    # Statistics for first 50 seconds (static phase - correct model)
     static_indices = times <= 50.0
     static_pos_rmse = np.sqrt(np.mean(position_error_mag[static_indices]**2))
     static_vel_rmse = np.sqrt(np.mean(velocity_error_mag[static_indices]**2))
 
-    # Statistics for last 50 seconds (motion phase)
+    # Statistics for last 50 seconds (motion phase - wrong model)
     motion_indices = times > 50.0
     motion_pos_rmse = np.sqrt(np.mean(position_error_mag[motion_indices]**2))
     motion_vel_rmse = np.sqrt(np.mean(velocity_error_mag[motion_indices]**2))
@@ -195,64 +184,56 @@ def main():
     print(f"  Overall - Velocity RMSE: {overall_vel_rmse:.3f} m/s")
     print()
 
-    # Model probability statistics
-    print("Model Probability Statistics:")
-    static_prob_avg = np.mean(model_probabilities[static_indices, 0])
-    motion_cv_prob_avg = np.mean(model_probabilities[motion_indices, 1])
-    print(f"  Static phase - Average Static model probability: {static_prob_avg:.3f}")
-    print(f"  Motion phase - Average CV model probability: {motion_cv_prob_avg:.3f}")
-    print()
-
-    # Create comprehensive plots including model probabilities
+    # Create comprehensive plots
     print("Creating plots...")
 
     plt.style.use('default')
-    fig = plt.figure(figsize=(18, 20))  # Increased height for additional plots
+    fig = plt.figure(figsize=(16, 14))  # Increased height for additional plot
 
     # Plot 1: True vs Estimated Positions
-    ax1 = plt.subplot(5, 2, 1)
+    ax1 = plt.subplot(4, 2, 1)
     plt.plot(times, true_positions[:, 0], 'b-', linewidth=2, label='True X Position')
     plt.plot(times, estimated_positions[:, 0], 'r--', linewidth=2, label='Estimated X Position')
     plt.axvline(x=50, color='k', linestyle=':', alpha=0.7, label='Motion starts')
     plt.xlabel('Time (s)')
     plt.ylabel('X Position (m)')
-    plt.title('X Position: True vs Estimated (IMM)')
+    plt.title('X Position: True vs Estimated')
     plt.legend()
     plt.grid(True, alpha=0.3)
 
-    ax2 = plt.subplot(5, 2, 2)
+    ax2 = plt.subplot(4, 2, 2)
     plt.plot(times, true_positions[:, 1], 'b-', linewidth=2, label='True Y Position')
     plt.plot(times, estimated_positions[:, 1], 'r--', linewidth=2, label='Estimated Y Position')
     plt.axvline(x=50, color='k', linestyle=':', alpha=0.7, label='Motion starts')
     plt.xlabel('Time (s)')
     plt.ylabel('Y Position (m)')
-    plt.title('Y Position: True vs Estimated (IMM)')
+    plt.title('Y Position: True vs Estimated')
     plt.legend()
     plt.grid(True, alpha=0.3)
 
     # Plot 3: True vs Estimated Velocities
-    ax3 = plt.subplot(5, 2, 3)
+    ax3 = plt.subplot(4, 2, 3)
     plt.plot(times, true_velocities[:, 0], 'b-', linewidth=2, label='True X Velocity')
     plt.plot(times, estimated_velocities[:, 0], 'r--', linewidth=2, label='Estimated X Velocity')
     plt.axvline(x=50, color='k', linestyle=':', alpha=0.7, label='Motion starts')
     plt.xlabel('Time (s)')
     plt.ylabel('X Velocity (m/s)')
-    plt.title('X Velocity: True vs Estimated (IMM)')
+    plt.title('X Velocity: True vs Estimated')
     plt.legend()
     plt.grid(True, alpha=0.3)
 
-    ax4 = plt.subplot(5, 2, 4)
+    ax4 = plt.subplot(4, 2, 4)
     plt.plot(times, true_velocities[:, 1], 'b-', linewidth=2, label='True Y Velocity')
     plt.plot(times, estimated_velocities[:, 1], 'r--', linewidth=2, label='Estimated Y Velocity')
     plt.axvline(x=50, color='k', linestyle=':', alpha=0.7, label='Motion starts')
     plt.xlabel('Time (s)')
     plt.ylabel('Y Velocity (m/s)')
-    plt.title('Y Velocity: True vs Estimated (IMM)')
+    plt.title('Y Velocity: True vs Estimated')
     plt.legend()
     plt.grid(True, alpha=0.3)
 
     # Plot 5: Position Tracking Errors
-    ax5 = plt.subplot(5, 2, 5)
+    ax5 = plt.subplot(4, 2, 5)
     plt.plot(times, position_errors[:, 0], 'r-', linewidth=1.5, label='X Position Error')
     plt.plot(times, position_errors[:, 1], 'g-', linewidth=1.5, label='Y Position Error')
     plt.plot(times, position_error_mag, 'k-', linewidth=2, label='Position Error Magnitude')
@@ -260,12 +241,12 @@ def main():
     plt.axhline(y=0, color='k', linestyle='-', alpha=0.3)
     plt.xlabel('Time (s)')
     plt.ylabel('Position Error (m)')
-    plt.title('Position Tracking Errors (IMM)')
+    plt.title('Position Tracking Errors')
     plt.legend()
     plt.grid(True, alpha=0.3)
 
     # Plot 6: Velocity Tracking Errors
-    ax6 = plt.subplot(5, 2, 6)
+    ax6 = plt.subplot(4, 2, 6)
     plt.plot(times, velocity_errors[:, 0], 'r-', linewidth=1.5, label='X Velocity Error')
     plt.plot(times, velocity_errors[:, 1], 'g-', linewidth=1.5, label='Y Velocity Error')
     plt.plot(times, velocity_error_mag, 'k-', linewidth=2, label='Velocity Error Magnitude')
@@ -273,62 +254,38 @@ def main():
     plt.axhline(y=0, color='k', linestyle='-', alpha=0.3)
     plt.xlabel('Time (s)')
     plt.ylabel('Velocity Error (m/s)')
-    plt.title('Velocity Tracking Errors (IMM)')
+    plt.title('Velocity Tracking Errors')
     plt.legend()
     plt.grid(True, alpha=0.3)
 
-    # Plot 7: Model Probabilities
-    ax7 = plt.subplot(5, 2, 7)
-    plt.plot(times, model_probabilities[:, 0], 'b-', linewidth=2, label='Static Model Prob')
-    plt.plot(times, model_probabilities[:, 1], 'r-', linewidth=2, label='CV Model Prob')
+    # Plot 7: Innovation Sequence X
+    ax7 = plt.subplot(4, 2, 7)
+    plt.plot(times, innovations[:, 0], 'b-', linewidth=1.5, label='X Innovation')
     plt.axvline(x=50, color='k', linestyle=':', alpha=0.7, label='Motion starts')
-    plt.axhline(y=0.5, color='k', linestyle='--', alpha=0.5, label='50% threshold')
+    plt.axhline(y=0, color='k', linestyle='-', alpha=0.3)
     plt.xlabel('Time (s)')
-    plt.ylabel('Model Probability')
-    plt.title('2-Model IMM Probabilities (Static + CV)')
+    plt.ylabel('Innovation (m)')
+    plt.title('Innovation Sequence X (Measurement - Prediction)')
     plt.legend()
     plt.grid(True, alpha=0.3)
-    plt.ylim(0, 1)
 
-    # Plot 8: Innovation Sequences for Static Model
-    ax8 = plt.subplot(5, 2, 8)
-    plt.plot(times, innovation_static_mag, 'b-', linewidth=2, label='Static Model Innovation')
+    # Plot 8: Innovation Sequence Magnitude
+    ax8 = plt.subplot(4, 2, 8)
+    plt.plot(times, innovation_mag, 'r-', linewidth=2, label='Innovation Magnitude')
     plt.axvline(x=50, color='k', linestyle=':', alpha=0.7, label='Motion starts')
     plt.axhline(y=0, color='k', linestyle='-', alpha=0.3)
     plt.xlabel('Time (s)')
     plt.ylabel('Innovation Magnitude (m)')
-    plt.title('Static Model Innovation Sequence')
+    plt.title('Innovation Sequence Magnitude')
     plt.legend()
     plt.grid(True, alpha=0.3)
 
-    # Plot 9: Innovation Sequences for CV Model
-    ax9 = plt.subplot(5, 2, 9)
-    plt.plot(times, innovation_cv_mag, 'r-', linewidth=2, label='CV Model Innovation')
-    plt.axvline(x=50, color='k', linestyle=':', alpha=0.7, label='Motion starts')
-    plt.axhline(y=0, color='k', linestyle='-', alpha=0.3)
-    plt.xlabel('Time (s)')
-    plt.ylabel('Innovation Magnitude (m)')
-    plt.title('CV Model Innovation Sequence')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-
-    # Plot 10: Innovation Comparison
-    ax10 = plt.subplot(5, 2, 10)
-    plt.plot(times, innovation_static_mag, 'b-', linewidth=2, label='Static Model')
-    plt.plot(times, innovation_cv_mag, 'r-', linewidth=2, label='CV Model')
-    plt.axvline(x=50, color='k', linestyle=':', alpha=0.7, label='Motion starts')
-    plt.axhline(y=0, color='k', linestyle='-', alpha=0.3)
-    plt.xlabel('Time (s)')
-    plt.ylabel('Innovation Magnitude (m)')
-    plt.title('Innovation Comparison: Static vs CV')
-    plt.legend()
-    plt.grid(True, alpha=0.3)
-
-    plt.suptitle('Correct Model Tracking: 2-Model IMM Filter (Static + CV)', fontsize=16, fontweight='bold')
+    plt.suptitle('Wrong Model Tracking: Static Filter vs Moving Target', fontsize=16, fontweight='bold')
     plt.tight_layout()
 
     # Save the plot
-    plot_filename = 'correct_model_tracking_performance.png'
+    os.makedirs('../results/tracking_1_model', exist_ok=True)
+    plot_filename = '../results/tracking_1_model/wrong_model_tracking_errors.png'
     plt.savefig(plot_filename, dpi=300, bbox_inches='tight')
     print(f"Comprehensive plots saved to: {plot_filename}")
 
@@ -336,16 +293,15 @@ def main():
     print("=" * 50)
     print("SIMULATION SUMMARY")
     print("=" * 50)
-    print("This simulation demonstrates proper tracking using a 2-model IMM filter:")
+    print("This simulation demonstrates the effects of using a wrong motion model:")
     print("- Target: Static (0-50s) → Constant velocity 10 m/s (50-100s)")
-    print("- Tracker: 2-Model IMM with Static + Constant Velocity models only")
+    print("- Tracker: Static model throughout (correct only for first 50s)")
     print()
     print("Key observations:")
     print(f"- During static phase: Good tracking (Pos RMSE = {static_pos_rmse:.3f} m)")
-    print(f"- During motion phase: Good tracking (Pos RMSE = {motion_pos_rmse:.3f} m)")
-    print(f"- Velocity estimation: Accurate during motion (RMSE = {motion_vel_rmse:.3f} m/s)")
-    print(f"- Model switching: Static prob = {static_prob_avg:.3f} → CV prob = {motion_cv_prob_avg:.3f}")
-    print("- 2-Model IMM adapts automatically to changing target dynamics")
+    print(f"- During motion phase: Poor tracking (Pos RMSE = {motion_pos_rmse:.3f} m)")
+    print(f"- Velocity estimation: Always wrong during motion (RMSE = {motion_vel_rmse:.3f} m/s)")
+    print("- Static model cannot adapt to the target's motion")
 
 
 if __name__ == '__main__':
