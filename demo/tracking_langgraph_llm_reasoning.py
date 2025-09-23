@@ -391,12 +391,26 @@ class LLMEnhancedInnovationAgent:
 
         stats = innovation_data["statistical_metrics"]
 
-        prompt = f"""Analyze Kalman filter innovation at time {current_time:.1f}s.
+        prompt = f"""Analyze Kalman filter innovation sequence at time {current_time:.1f}s.
 
-FILTER: Static model (assumes stationary target)
-STATS: Bias X={stats['x_bias']:.3f}m Y={stats['y_bias']:.3f}m Total={stats['total_bias']:.3f}m, Variance X={stats['x_variance']:.3f} Y={stats['y_variance']:.3f}, Samples={stats['sample_count']}
+CURRENT FILTER: Static motion model (assumes stationary target)
+INNOVATION STATS: Bias X={stats['x_bias']:.3f}m Y={stats['y_bias']:.3f}m Total={stats['total_bias']:.3f}m, Variance X={stats['x_variance']:.3f} Y={stats['y_variance']:.3f}, Samples={stats['sample_count']}
 
-Evaluate if innovation indicates model mismatch. Provide structured JSON response."""
+INNOVATION ANALYSIS GUIDE:
+- Innovation = Measurement - Prediction
+- Consistent bias suggests model mismatch
+- Large X-bias often indicates unmodeled velocity
+- Large Y-bias may indicate cross-track motion
+- High variance suggests process noise or maneuvering
+
+RECOMMENDED ACTIONS:
+- continue_current: Current model performing adequately
+- switch_to_cv: Switch to constant velocity model
+- switch_to_ca: Switch to constant acceleration model
+- hybrid_approach: Use multiple model approach (IMM)
+- investigate: Pattern unclear, gather more data
+
+Analyze the innovation pattern and provide your assessment."""
 
         return prompt
 
@@ -490,7 +504,8 @@ def main():
     # Initialize LLM-enhanced agent
     agent = LLMEnhancedInnovationAgent(
         window_size=20,
-        bias_threshold=1.5
+        bias_threshold=1.5,
+        ollama_model='tinyllama'  # Fast inference model
     )
 
     print("LLM-enhanced Innovation Monitoring Agent initialized")
