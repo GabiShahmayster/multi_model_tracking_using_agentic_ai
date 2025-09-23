@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from enum import Enum
 import statistics
 import json
-
+from tqdm import tqdm
 # Add base directory to path to import core modules
 sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'base'))
 
@@ -39,6 +39,9 @@ from trackers import StaticKalmanFilter
 
 from langchain_community.llms import Ollama
 from langgraph.graph import StateGraph, END
+import outlines
+from pydantic import BaseModel, Field
+from typing import Literal
 
 
 # Enhanced State Management with LLM capabilities
@@ -46,6 +49,36 @@ class AlertLevel(Enum):
     NORMAL = "normal"
     WARNING = "warning"
     CRITICAL = "critical"
+
+# Structured LLM Output Schema
+class InnovationAnalysis(BaseModel):
+    """Structured output schema for LLM innovation sequence analysis"""
+
+    model_mismatch_detected: bool = Field(
+        description="Whether systematic model mismatch is detected"
+    )
+
+    confidence_score: float = Field(
+        ge=0.0, le=1.0,
+        description="Confidence in the analysis (0.0 to 1.0)"
+    )
+
+    bias_severity: Literal["none", "low", "moderate", "high", "severe"] = Field(
+        description="Severity level of detected bias"
+    )
+
+    pattern_type: Literal["normal_noise", "systematic_bias", "trend_drift", "oscillatory", "unknown"] = Field(
+        description="Type of pattern detected in innovation sequence"
+    )
+
+    recommended_action: Literal["continue_current", "switch_to_cv", "switch_to_ca", "hybrid_approach", "investigate"] = Field(
+        description="Recommended action based on analysis"
+    )
+
+    brief_explanation: str = Field(
+        max_length=200,
+        description="Brief explanation of the analysis (max 200 chars)"
+    )
 
 @dataclass
 class EnhancedInnovationAlert:
@@ -83,12 +116,23 @@ class LLMEnhancedInnovationAgent:
     """
 
     def __init__(self, window_size: int = 20, bias_threshold: float = 1.5,
-                 ollama_model: str = "llama3"):
+                 ollama_model: str = "tinyllama"):
 
-        # Initialize LLM
+        # Initialize LLM with structured output
         try:
-            self.llm = Ollama(model=ollama_model, base_url="http://localhost:11434")
-            print(f"Initialized Ollama with model: {ollama_model}")
+            # Create base Ollama LLM
+            base_llm = Ollama(model=ollama_model, base_url="http://localhost:11434")
+
+            # Create structured LLM using Outlines
+            import outlines
+            import ollama
+            # Create proper Ollama client
+            ollama_client = ollama.Client(host="http://localhost:11434")
+            # Use Ollama model with Outlines for structured generation
+            outlines_model = outlines.from_ollama(ollama_client, model_name=ollama_model)
+            self.structured_llm = outlines.generator.Generator(outlines_model, InnovationAnalysis)
+
+            print(f"Initialized structured Ollama LLM with model: {ollama_model}")
         except Exception as e:
             print(f"Failed to connect to Ollama: {e}")
             raise ConnectionError(f"Could not connect to Ollama at http://localhost:11434 with model {ollama_model}")
@@ -193,35 +237,49 @@ class LLMEnhancedInnovationAgent:
         # Create structured prompt for LLM
         prompt = self._create_llm_prompt(innovation_summary, state["timestamps"][-1] if state["timestamps"] else 0.0)
 
-        # Get LLM analysis
+        # Get structured LLM analysis
         try:
-            llm_response = self.llm(prompt)
+            # Use structured LLM to get JSON response
+            llm_response = self.structured_llm(prompt)
 
-            # Parse LLM response (simplified parsing)
-            analysis_parts = llm_response.split("Confidence:")
-            analysis_text = analysis_parts[0].strip()
+            # Parse JSON response if it's a string
+            if isinstance(llm_response, str):
+                import json
+                parsed_response = json.loads(llm_response)
 
-            if len(analysis_parts) > 1:
-                confidence_part = analysis_parts[1].split("Recommendation:")[0].strip()
-                try:
-                    # Extract confidence score
-                    confidence_score = float(''.join(filter(str.isdigit, confidence_part.split('(')[1].split(')')[0]))) / 100.0
-                except:
-                    confidence_score = 0.5
+                # Normalize confidence score if it's a percentage
+                if 'confidence_score' in parsed_response:
+                    conf = parsed_response['confidence_score']
+                    if conf > 1.0:  # Convert percentage to decimal
+                        parsed_response['confidence_score'] = conf / 100.0
+
+                structured_response = InnovationAnalysis(**parsed_response)
             else:
-                confidence_score = 0.5
+                structured_response = llm_response
 
-            # Extract recommendation
-            if "Recommendation:" in llm_response:
-                recommendation = llm_response.split("Recommendation:")[1].strip()
-            else:
-                recommendation = "Continue monitoring"
+            # Extract structured data
+            analysis_text = structured_response.brief_explanation
+            confidence_score = structured_response.confidence_score
+            recommendation = structured_response.recommended_action
 
+            # Store full structured response for decision fusion
+            state["current_structured_analysis"] = structured_response
+            print("recommended_action:", recommendation)
         except Exception as e:
             print(f"LLM analysis failed: {e}")
             analysis_text = "LLM analysis unavailable"
             confidence_score = 0.0
-            recommendation = "Statistical analysis only"
+            recommendation = "statistical_analysis_only"
+
+            # Create fallback structured response
+            state["current_structured_analysis"] = InnovationAnalysis(
+                model_mismatch_detected=False,
+                confidence_score=0.0,
+                bias_severity="none",
+                pattern_type="unknown",
+                recommended_action="investigate",
+                brief_explanation="LLM analysis failed"
+            )
 
         # Update state with LLM insights
         state["llm_conversation_history"].append({
@@ -250,16 +308,32 @@ class LLMEnhancedInnovationAgent:
         bias_detected = stats["total_bias"] > state["bias_threshold"]
         high_variance = stats["total_variance"] > 2.0
 
-        # LLM confidence weighting
-        llm_confidence = state.get("current_confidence", 0.5)
-        llm_suggests_error = "bias" in state.get("current_llm_analysis", "").lower() or "mismatch" in state.get("current_llm_analysis", "").lower()
+        # Get structured LLM analysis
+        structured_analysis = state.get("current_structured_analysis")
+        if structured_analysis:
+            llm_confidence = structured_analysis.confidence_score
+            llm_suggests_error = structured_analysis.model_mismatch_detected
+            bias_severity = structured_analysis.bias_severity
+        else:
+            llm_confidence = 0.5
+            llm_suggests_error = False
+            bias_severity = "unknown"
 
-        # Fusion logic
+        # Enhanced fusion logic using structured data
         confidence_weighted_bias = bias_detected and (llm_confidence > 0.6)
         llm_reinforced_detection = bias_detected and llm_suggests_error
 
-        # Final decision
-        model_error_detected = bias_detected or (llm_suggests_error and llm_confidence > 0.7)
+        # Use bias severity for more nuanced decisions
+        severity_weight = {
+            "none": 0.0, "low": 0.3, "moderate": 0.6, "high": 0.8, "severe": 1.0
+        }.get(bias_severity, 0.5)
+
+        # Final decision with structured input
+        model_error_detected = (
+            bias_detected or
+            (llm_suggests_error and llm_confidence > 0.7) or
+            (severity_weight > 0.6 and llm_confidence > 0.5)
+        )
 
         # Determine alert level
         if model_error_detected:
@@ -317,36 +391,12 @@ class LLMEnhancedInnovationAgent:
 
         stats = innovation_data["statistical_metrics"]
 
-        prompt = f"""
-You are analyzing innovation sequences from a Kalman filter tracking system at time {current_time:.1f}s.
+        prompt = f"""Analyze Kalman filter innovation at time {current_time:.1f}s.
 
-CONTEXT:
-- Filter Model: Static motion model (assumes target is stationary)
-- Innovation = Measurement - Prediction (should be zero-mean noise if model is correct)
-- Target Motion: Static (0-50s), then Constant Velocity 10 m/s (50-100s)
+FILTER: Static model (assumes stationary target)
+STATS: Bias X={stats['x_bias']:.3f}m Y={stats['y_bias']:.3f}m Total={stats['total_bias']:.3f}m, Variance X={stats['x_variance']:.3f} Y={stats['y_variance']:.3f}, Samples={stats['sample_count']}
 
-CURRENT STATISTICS:
-- X-axis bias: {stats['x_bias']:.3f}m
-- Y-axis bias: {stats['y_bias']:.3f}m
-- Total bias magnitude: {stats['total_bias']:.3f}m
-- X-axis variance: {stats['x_variance']:.3f}
-- Y-axis variance: {stats['y_variance']:.3f}
-- Sample count: {stats['sample_count']}
-
-RECENT INNOVATIONS (x, y):
-{innovation_data['recent_innovations'][-5:] if len(innovation_data['recent_innovations']) >= 5 else innovation_data['recent_innovations']}
-
-ANALYSIS REQUEST:
-1. Evaluate if the innovation pattern indicates model mismatch
-2. Consider the expected motion profile vs filter assumptions
-3. Assess confidence in your analysis (scale 0.0-1.0)
-4. Provide recommendation for filter adaptation
-
-Format your response as:
-Analysis: [Your interpretation of the innovation patterns and model appropriateness]
-Confidence: [Score 0.0-1.0] ([percentage]%)
-Recommendation: [Suggested action for the tracking system]
-"""
+Evaluate if innovation indicates model mismatch. Provide structured JSON response."""
 
         return prompt
 
@@ -398,8 +448,8 @@ def main():
     print("=" * 60)
 
     # Simulation parameters
-    duration = 100.0
-    dt = 0.5
+    duration = 40.0
+    dt = 1.0
     measurement_noise_std = 0.5
 
     print(f"Simulation duration: {duration} seconds")
@@ -417,9 +467,9 @@ def main():
 
     # Create motion simulator
     sim = MotionSimulator(x0=0.0, y0=0.0, vx0=0.0, vy0=0.0)
-    sim.add_segment(sim.STATIC, 50.0)
+    sim.add_segment(sim.STATIC, 20.0)
     sim.add_segment(sim.CONSTANT_ACCELERATION, 0.1, ax=100.0, ay=0.0)
-    sim.add_segment(sim.CONSTANT_VELOCITY, 49.9)
+    sim.add_segment(sim.CONSTANT_VELOCITY, 19.9)
 
     print(f"Motion simulator created with {len(sim.segments)} segments")
     print(f"Total simulation duration: {sim.duration} seconds")
@@ -483,7 +533,7 @@ def main():
     # Run tracking simulation with LLM-enhanced monitoring
     print("Running tracking simulation with LLM-enhanced agent monitoring...")
 
-    for i, t in enumerate(times):
+    for i, t in enumerate(tqdm(times,total=len(times))):
         # Get prediction for innovation calculation
         if i == 0:
             predicted_pos = tracker.get_state()
@@ -688,7 +738,6 @@ def main():
     # Calculate rolling statistics for visualization
     window_size = 20
     rolling_bias = []
-    rolling_variance = []
     rolling_times = []
 
     for i in range(window_size, len(times)):
@@ -696,14 +745,11 @@ def main():
         window_innovations_y = innovations[i-window_size:i, 1]
 
         bias = np.sqrt(np.mean(window_innovations_x)**2 + np.mean(window_innovations_y)**2)
-        variance = np.sqrt(np.var(window_innovations_x) + np.var(window_innovations_y))
 
         rolling_bias.append(bias)
-        rolling_variance.append(variance)
         rolling_times.append(times[i])
 
     plt.plot(rolling_times, rolling_bias, 'red', linewidth=2, label='Rolling Bias')
-    plt.plot(rolling_times, rolling_variance, 'blue', linewidth=2, label='Rolling Variance')
     plt.axhline(y=1.5, color='orange', linestyle='--', alpha=0.7, label='Bias Threshold')
     plt.axvline(x=50, color='k', linestyle=':', alpha=0.7, label='Motion starts')
     plt.xlabel('Time (s)')

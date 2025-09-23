@@ -9,4 +9,7 @@ dependencies = [
     "langgraph>=0.6.7",
     "matplotlib>=3.10.6",
     "numpy>=2.3.3",
+    "ollama>=0.5.4",
+    "outlines>=1.2.5",
+    "tqdm>=4.67.1",
 ]
