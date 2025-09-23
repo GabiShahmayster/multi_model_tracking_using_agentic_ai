@@ -106,6 +106,7 @@ class LLMEnhancedMonitorState(TypedDict):
     pattern_descriptions: List[str]
     confidence_scores: List[float]
     llm_recommendations: List[str]
+    previous_recommendation: Optional[str]
     statistical_summary: Dict[str, float]
 
 
@@ -151,6 +152,7 @@ class LLMEnhancedInnovationAgent:
             pattern_descriptions=[],
             confidence_scores=[],
             llm_recommendations=[],
+            previous_recommendation=None,
             statistical_summary={}
         )
 
@@ -235,7 +237,11 @@ class LLMEnhancedInnovationAgent:
         }
 
         # Create structured prompt for LLM
-        prompt = self._create_llm_prompt(innovation_summary, state["timestamps"][-1] if state["timestamps"] else 0.0)
+        prompt = self._create_llm_prompt(
+            innovation_summary,
+            state["timestamps"][-1] if state["timestamps"] else 0.0,
+            state["previous_recommendation"]
+        )
 
         # Get structured LLM analysis
         try:
@@ -290,6 +296,9 @@ class LLMEnhancedInnovationAgent:
 
         state["confidence_scores"].append(confidence_score)
         state["llm_recommendations"].append(recommendation)
+
+        # Update previous recommendation for next analysis
+        state["previous_recommendation"] = recommendation
 
         # Store analysis for decision fusion
         state["current_llm_analysis"] = analysis_text
@@ -386,21 +395,24 @@ class LLMEnhancedInnovationAgent:
 
         return state
 
-    def _create_llm_prompt(self, innovation_data: Dict, current_time: float) -> str:
+    def _create_llm_prompt(self, innovation_data: Dict, current_time: float, previous_recommendation: Optional[str] = None) -> str:
         """Create structured prompt for LLM analysis"""
 
         stats = innovation_data["statistical_metrics"]
 
+        # Include previous recommendation context if available
+        previous_context = ""
+        if previous_recommendation:
+            previous_context = f"\nPREVIOUS RECOMMENDATION: {previous_recommendation}"
+
         prompt = f"""Analyze Kalman filter innovation sequence at time {current_time:.1f}s.
 
 CURRENT FILTER: Static motion model (assumes stationary target)
-INNOVATION STATS: Bias X={stats['x_bias']:.3f}m Y={stats['y_bias']:.3f}m Total={stats['total_bias']:.3f}m, Variance X={stats['x_variance']:.3f} Y={stats['y_variance']:.3f}, Samples={stats['sample_count']}
+INNOVATION STATS: Bias X={stats['x_bias']:.3f}m Y={stats['y_bias']:.3f}m Total={stats['total_bias']:.3f}m, Variance X={stats['x_variance']:.3f} Y={stats['y_variance']:.3f}, Samples={stats['sample_count']}{previous_context}
 
 INNOVATION ANALYSIS GUIDE:
 - Innovation = Measurement - Prediction
-- Consistent bias suggests model mismatch
-- Large X-bias often indicates unmodeled velocity
-- Large Y-bias may indicate cross-track motion
+- Biased innovations suggest model mismatch
 - High variance suggests process noise or maneuvering
 
 RECOMMENDED ACTIONS:
@@ -410,7 +422,13 @@ RECOMMENDED ACTIONS:
 - hybrid_approach: Use multiple model approach (IMM)
 - investigate: Pattern unclear, gather more data
 
-Analyze the innovation pattern and provide your assessment."""
+CONSISTENCY GUIDANCE:
+- Only change recommendation if new evidence strongly supports it
+- Avoid oscillating between recommendations unless conditions clearly change
+- Consider trend direction: is bias increasing, decreasing, or stable?
+- If previous recommendation was appropriate, maintain it unless bias significantly changes
+
+Analyze the innovation pattern and provide your assessment with consistent reasoning."""
 
         return prompt
 
