@@ -1,6 +1,8 @@
 # Target Tracking System with LLM-Enhanced Analysis
 
 A comprehensive target tracking system that demonstrates various tracking algorithms and incorporates large language model (LLM) analysis for intelligent pattern recognition and anomaly detection.
+<img width="5370" height="4719" alt="wrong_model_with_llm_tracking" src="https://github.com/user-attachments/assets/847965ee-532d-4061-a764-6f1d4130f93e" />
+
 
 ## Overview
 
